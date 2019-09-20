@@ -8,7 +8,6 @@ License: MIT
 '''
 from pkg_resources import resource_filename
 from passporteye.util.pdf import extract_first_jpeg_in_pdf
-import sys
 
 # Smoke test for "extract_first_jpeg_in_pdf"
 def test_extract_jpeg():

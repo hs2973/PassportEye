@@ -20,7 +20,7 @@ from pdfminer.converter import PDFPageAggregator
 from pdfminer.layout import LTFigure, LTImage
 
 
-def extract_first_jpeg_in_pdf(fstream):
+def extract_jpegs_from_pdf(fstream):
     """
     Reads a given PDF file and scans for the first valid embedded JPEG image.
     Returns either None (if none found) or a string of data for the image.
@@ -55,13 +55,15 @@ def extract_first_jpeg_in_pdf(fstream):
                 for im in el:
                     if isinstance(im, LTImage):
                         # Found one!
-                        st = None
                         try:
                             imdata = im.stream.get_data()
                         except:
                             # Failed to decode (seems to happen nearly always - there's probably a bug in PDFMiner), oh well...
                             imdata = im.stream.get_rawdata()
                         if imdata is not None and imdata.startswith(b'\xff\xd8\xff\xe0'):
-                            return imdata
+                            yield imdata
 
     return None
+
+def extract_first_jpeg_in_pdf(fstream):
+    return next(extract_jpegs_from_pdf(fstream), None)

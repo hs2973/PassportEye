@@ -9,12 +9,14 @@ import io
 import numpy as np
 from skimage import transform, morphology, filters, measure
 from skimage import io as skimage_io # So as not to clash with builtin io
-from ..util.pdf import extract_first_jpeg_in_pdf
+from ..util.pdf import extract_jpegs_from_pdf
 from ..util.pipeline import Pipeline
 from ..util.geometry import RotatedBox
 from ..util.ocr import ocr
 from .text import MRZ
 
+PDF_AWARE = True
+JPEG_EXTRACTS = None
 
 class Loader(object):
     """Loads `file` to `img`."""
@@ -22,10 +24,12 @@ class Loader(object):
     __depends__ = []
     __provides__ = ['img']
 
-    def __init__(self, file, as_gray=True, pdf_aware=True):
+    def __init__(self, file, as_gray=True, pdf_aware=True, pdf_jpeg_n=0, num_rotations=0):
         self.file = file
         self.as_gray = as_gray
         self.pdf_aware = pdf_aware
+        self.pdf_jpeg_n = pdf_jpeg_n
+        self.num_rotations = num_rotations 
 
     def _imread(self, file):
         """Proxy to skimage.io.imread with some fixes."""
@@ -38,13 +42,15 @@ class Loader(object):
         if img is not None and len(img.shape) != 2:
             # The PIL plugin somewhy fails to load some images
             img = skimage_io.imread(file, as_gray=self.as_gray, plugin='matplotlib')
+        if self.num_rotations:
+            print("rotating... {} times".format(self.num_rotations))
+            img = np.rot90(img, self.num_rotations)
         return img
 
     def __call__(self):
         if isinstance(self.file, str):
             if self.pdf_aware and self.file.lower().endswith('.pdf'):
-                with open(self.file, 'rb') as f:
-                    img_data = extract_first_jpeg_in_pdf(f)
+                img_data = JPEG_EXTRACTS[self.pdf_jpeg_n]
                 if img_data is None:
                     return None
                 return self._imread(img_data)
@@ -305,7 +311,6 @@ class TryOtherMaxWidth(object):
             mrz = new_mrz
         return mrz
 
-
 class MRZPipeline(Pipeline):
     """This is the "currently best-performing" pipeline for parsing MRZ from a given image file."""
 
@@ -313,7 +318,7 @@ class MRZPipeline(Pipeline):
         super(MRZPipeline, self).__init__()
         self.version = '1.0'  # In principle we might have different pipelines in use, so possible backward compatibility is an issue
         self.file = file
-        self.add_component('loader', Loader(file))
+        self.add_component('loader', Loader(file, pdf_aware=PDF_AWARE))
         self.add_component('scaler', Scaler())
         self.add_component('boone', BooneTransform())
         self.add_component('box_locator', MRZBoxLocator())
@@ -333,9 +338,33 @@ def read_mrz(file, save_roi=False, extra_cmdline_params=''):
     :param save_roi: when this is True, the .aux['roi'] field will contain the Region of Interest where the MRZ was parsed from.
     :param extra_cmdline_params:extra parameters to the ocr.py
     """
+    global PDF_AWARE, JPEG_EXTRACTS
+    
     p = MRZPipeline(file, extra_cmdline_params)
-    mrz = p.result
+    if PDF_AWARE and isinstance(file, str) and file.lower().endswith('.pdf'):
+        with open(file, 'rb') as f:
+            JPEG_EXTRACTS = list(extract_jpegs_from_pdf(f))
+            print("Total JPEGs in page found by passporteye.util.pdf.extract_jpegs_from_pdf: {}".format(len(JPEG_EXTRACTS)))
+            if len(JPEG_EXTRACTS) == 0: return None
+        for j in range(len(JPEG_EXTRACTS)):
+            p.components['loader'].pdf_jpeg_n = j
+            p.invalidate('img')
+            mrz = p.result
+            for i in range(3):
+                if mrz is not None: break
+                p.components['loader'].num_rotations = i + 1 # number of times the image is rotated by 90 degrees
+                p.invalidate('img')
+                mrz = p.result
+            if mrz is not None: break
+    else:
+        mrz = p.result
+        for i in range(3):
+            if mrz is not None: break
+            p.components['loader'].num_rotations = i + 1 # number of times the image is rotated by 90 degrees
+            p.invalidate('img')
+            mrz = p.result
 
+    if mrz: print(mrz.to_dict())
     if mrz is not None:
         mrz.aux['text'] = p['text']
         if save_roi:
