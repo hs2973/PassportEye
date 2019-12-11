@@ -4,20 +4,17 @@ PassportEye::Util: PDF processing utilities.
 Author: Konstantin Tretyakov
 License: MIT
 '''
-
-import sys
-PY2 = sys.version_info.major == 2
-
-if PY2:
-    from pdfminer.pdfparser import PDFParser
-    from pdfminer.pdfdocument import PDFDocument
-    from pdfminer.pdfpage import PDFPage
-else:
-    from pdfminer.pdfparser import PDFParser, PDFDocument, PDFPage
 from pdfminer.pdfinterp import PDFResourceManager
 from pdfminer.pdfinterp import PDFPageInterpreter
 from pdfminer.converter import PDFPageAggregator
 from pdfminer.layout import LTFigure, LTImage
+
+try:
+    from pdfminer.pdfparser import PDFParser, PDFDocument, PDFPage
+except ImportError:
+    from pdfminer.pdfparser import PDFParser
+    from pdfminer.pdfdocument import PDFDocument
+    from pdfminer.pdfpage import PDFPage
 
 
 def extract_jpegs_from_pdf(fstream):
@@ -36,17 +33,20 @@ def extract_jpegs_from_pdf(fstream):
     :return: binary stream, containing the whole contents of the JPEG image or None if extraction failed.
     """
     parser = PDFParser(fstream)
-    if PY2:
-        document = PDFDocument(parser)
-    else:
+    try:
         document = PDFDocument()
         parser.set_document(document)
         document.set_parser(parser)
         document.initialize('')
+    except TypeError:
+        document = PDFDocument(parser)
     rsrcmgr = PDFResourceManager()
     device = PDFPageAggregator(rsrcmgr)
     interpreter = PDFPageInterpreter(rsrcmgr, device)
-    pages = PDFPage.create_pages(document) if PY2 else document.get_pages()
+    try:
+        pages = document.get_pages()
+    except Exception:
+        pages = PDFPage.create_pages(document)
     for page in pages:
         interpreter.process_page(page)
         layout = device.result
@@ -57,13 +57,14 @@ def extract_jpegs_from_pdf(fstream):
                         # Found one!
                         try:
                             imdata = im.stream.get_data()
-                        except:
+                        except Exception:
                             # Failed to decode (seems to happen nearly always - there's probably a bug in PDFMiner), oh well...
                             imdata = im.stream.get_rawdata()
                         if imdata is not None and imdata.startswith(b'\xff\xd8\xff\xe0'):
                             yield imdata
 
     return None
+
 
 def extract_first_jpeg_in_pdf(fstream):
     return next(extract_jpegs_from_pdf(fstream), None)
